@@ -29,12 +29,16 @@ class TestSystemLexicon:
 
     def test_percentage_normalization(self):
         result = normalize_percentage("增长了50%")
-        assert "百分之" in result
+        assert result == "增长了百分之50"
 
     def test_unit_normalization(self):
         result = normalize_units("5kg的米和30cm的线")
         assert "千克" in result
         assert "厘米" in result
+
+    def test_longer_units_are_replaced_before_shorter_units(self):
+        result = normalize_units("100ml、2m²、3km²、4mm、5cm、6km、7m")
+        assert result == "100毫升、2平方米、3平方千米、4毫米、5厘米、6千米、7米"
 
     def test_english_in_chinese(self):
         result = normalize_english_in_chinese("他使用了AI技术。")
@@ -55,7 +59,7 @@ class TestSystemLexicon:
         assert first == second
 
     def test_get_version(self):
-        assert get_version() == "1.0.0"
+        assert get_version() == "1.0.1"
 
 
 class TestUserLexicon:
@@ -86,7 +90,7 @@ class TestPronunciationEngine:
 
     def test_system_version(self):
         engine = PronunciationEngine()
-        assert engine.system_version == "1.0.0"
+        assert engine.system_version == "1.0.1"
 
     def test_user_lexicon_overrides_system(self, tmp_path):
         lex_file = tmp_path / "lexicon.json"
@@ -97,6 +101,23 @@ class TestPronunciationEngine:
         engine = PronunciationEngine(user_lexicon=UserLexicon(lex_file))
         result = engine.normalize("2024年")
         assert "二零二四手动" in result
+
+    def test_cache_fingerprint_includes_user_lexicon_content(self, tmp_path):
+        lex_a = tmp_path / "lexicon_a.json"
+        lex_b = tmp_path / "lexicon_b.json"
+        lex_a.write_text(
+            '{"version":"1.0","overrides":{"陆明":"路明"},"disabled_system_rules":[]}',
+            encoding="utf-8",
+        )
+        lex_b.write_text(
+            '{"version":"1.0","overrides":{"陆明":"卢明"},"disabled_system_rules":[]}',
+            encoding="utf-8",
+        )
+
+        engine_a = PronunciationEngine(user_lexicon=UserLexicon(lex_a))
+        engine_b = PronunciationEngine(user_lexicon=UserLexicon(lex_b))
+
+        assert engine_a.cache_fingerprint != engine_b.cache_fingerprint
 
 
 class TestTTSInputComposerWithPronunciation:

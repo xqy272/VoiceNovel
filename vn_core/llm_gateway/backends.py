@@ -30,16 +30,30 @@ class MockLLMBackend:
         )
 
     def _mock_speaker(self, request: LLMRequest) -> str:
-        return json.dumps({
-            "speaker_candidate": None,
-            "speaker_id": "char_narrator",
-            "speaker_confidence": 0.5,
-            "reading_style": {"emotion": "neutral", "intensity": 0.0, "prosody_hint": "normal_pause"},
-            "evidence": ["mock: no explicit speaker tag found"],
-        }, ensure_ascii=False)
+        return json.dumps(
+            {
+                "speaker_candidate": None,
+                "speaker_id": "char_narrator",
+                "speaker_confidence": 0.5,
+                "reading_style": {
+                    "emotion": "neutral",
+                    "intensity": 0.0,
+                    "prosody_hint": "normal_pause",
+                },
+                "evidence": ["mock: no explicit speaker tag found"],
+            },
+            ensure_ascii=False,
+        )
 
     def _mock_style(self, request: LLMRequest) -> str:
-        return json.dumps({"emotion": "neutral", "intensity": 0.0, "prosody_hint": "normal_pause"}, ensure_ascii=False)
+        return json.dumps(
+            {
+                "emotion": "neutral",
+                "intensity": 0.0,
+                "prosody_hint": "normal_pause",
+            },
+            ensure_ascii=False,
+        )
 
     def _mock_adaptation(self, request: LLMRequest) -> str:
         return json.dumps({"operations": []}, ensure_ascii=False)
@@ -48,7 +62,10 @@ class MockLLMBackend:
         return json.dumps({"characters": []}, ensure_ascii=False)
 
     def _mock_scene(self, request: LLMRequest) -> str:
-        return json.dumps({"summary": "A scene unfolds.", "active_characters": []}, ensure_ascii=False)
+        return json.dumps(
+            {"summary": "A scene unfolds.", "active_characters": []},
+            ensure_ascii=False,
+        )
 
     def _mock_generic(self, request: LLMRequest) -> str:
         return json.dumps({"result": "mock response"}, ensure_ascii=False)

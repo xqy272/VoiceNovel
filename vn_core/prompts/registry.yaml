@@ -147,7 +147,7 @@ prompts:
 
           For each issue found, output a JSON array of operations. Each operation must have:
           - op_id: unique id (op_001, op_002, ...)
-          - segment_id: the segment this applies to (use "paragraph")
+          - segment_id: the exact bracketed paragraph_id from the input, for example "ch001_p003"
           - original: the original text substring to replace
           - normalized: the corrected text
           - category: one of the categories above
@@ -162,7 +162,7 @@ prompts:
           [
             {
               "op_id": "op_001",
-              "segment_id": "paragraph",
+              "segment_id": "ch001_p003",
               "original": "ZF",
               "normalized": "政府",
               "category": "de_obfuscation",

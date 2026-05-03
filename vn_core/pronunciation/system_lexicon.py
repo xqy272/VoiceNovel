@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import re
 
-SYSTEM_LEXICON_VERSION = "1.0.0"
+SYSTEM_LEXICON_VERSION = "1.0.1"
 
 # ── Polyphonic character context rules ─────────────────────────────────────
 # Each rule: (pattern, replacement, description)
@@ -73,7 +73,7 @@ def normalize_year(text: str) -> str:
 
 def normalize_percentage(text: str) -> str:
     """Convert percentage patterns to readable Chinese form."""
-    return re.sub(r'(\d+(?:\.\d+)?)%', r'\1百分之', text)
+    return re.sub(r'(\d+(?:\.\d+)?)%', r'百分之\1', text)
 
 
 def normalize_decimal(text: str) -> str:
@@ -106,7 +106,7 @@ UNIT_MAP: dict[str, str] = {
 
 def normalize_units(text: str) -> str:
     """Replace common measurement units with Chinese readings."""
-    for unit, reading in UNIT_MAP.items():
+    for unit, reading in sorted(UNIT_MAP.items(), key=lambda item: len(item[0]), reverse=True):
         text = text.replace(unit, reading)
     return text
 

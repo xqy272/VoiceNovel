@@ -401,7 +401,10 @@ def create_app(data_dir: str = "data", store_path: str | None = None) -> FastAPI
         ):
             raise HTTPException(
                 status_code=400,
-                detail="Source file must be within the project data directory or current working directory",
+                detail=(
+                    "Source file must be within the project data directory "
+                    "or current working directory"
+                ),
             )
         if not source.exists():
             raise HTTPException(status_code=404, detail="Source file not found")

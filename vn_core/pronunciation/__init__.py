@@ -6,6 +6,9 @@ Priority chain (highest to lowest):
 
 from __future__ import annotations
 
+import hashlib
+import json
+
 from vn_core.pronunciation.system_lexicon import apply_system_rules
 from vn_core.pronunciation.system_lexicon import get_version as get_system_version
 from vn_core.pronunciation.user_lexicon import UserLexicon
@@ -120,3 +123,16 @@ class PronunciationEngine:
     @property
     def user_version(self) -> str:
         return self._user_lexicon.version
+
+    @property
+    def cache_fingerprint(self) -> str:
+        """Stable fingerprint for pronunciation inputs that affect TTS text."""
+        payload = {
+            "book_overrides": self._book_overrides,
+            "user_locks": self._user_locks,
+            "system_version": self.system_version,
+            "user_lexicon": self._user_lexicon.to_dict(),
+            "user_version": self.user_version,
+        }
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:40]

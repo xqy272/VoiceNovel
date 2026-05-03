@@ -98,6 +98,8 @@ def audio_take_cache_key(
     engine: str,
     reading_style: dict | None = None,
     generation_config_id: str = "",
+    format: str = "",
+    pronunciation: dict | None = None,
     input_artifact_versions: list[str] | None = None,
     cache_buster: str | None = None,
 ) -> str:
@@ -116,8 +118,10 @@ def audio_take_cache_key(
         "text": text,
         "voice_id": voice_id,
         "engine": engine,
+        "format": format,
         "reading_style": reading_style or {},
         "generation_config_id": generation_config_id,
+        "pronunciation": pronunciation or {},
         "input_artifact_versions": sorted_versions,
         "cache_buster": cache_buster,
     })

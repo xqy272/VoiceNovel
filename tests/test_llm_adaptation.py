@@ -12,7 +12,7 @@ from vn_core.adaptation.llm_adapter import (
 from vn_core.contracts.text_adaptation import (
     AdaptationCategory,
 )
-from vn_core.llm_gateway import LLMGateway
+from vn_core.llm_gateway import LLMGateway, LLMResponse
 
 
 @pytest.fixture
@@ -152,6 +152,57 @@ class TestPolicyFilters:
         )
         assert len(ops) == 0
 
+    def test_op_parse_resolves_paragraph_placeholder_by_original_text(self, llm_gateway):
+        adapter = LLMTextAdapter(llm_gateway, policy=AdaptationPolicy.balanced)
+        raw_ops = [{
+            "op_id": "op_001",
+            "segment_id": "paragraph",
+            "original": "在也",
+            "normalized": "再也",
+            "category": "typo_fix",
+            "scope": "display_and_tts",
+            "confidence": 0.99,
+            "risk": "low",
+            "evidence": ["test"],
+        }]
+
+        ops = adapter._parse_operations(
+            raw_ops,
+            [
+                {"paragraph_id": "ch001_p001", "text": "第一段无修改"},
+                {"paragraph_id": "ch001_p002", "text": "他在也没有回来。"},
+            ],
+            [0],
+        )
+
+        assert len(ops) == 1
+        assert ops[0].segment_id == "ch001_p002"
+
+    def test_op_parse_skips_ambiguous_placeholder(self, llm_gateway):
+        adapter = LLMTextAdapter(llm_gateway, policy=AdaptationPolicy.balanced)
+        raw_ops = [{
+            "op_id": "op_001",
+            "segment_id": "paragraph",
+            "original": "错字",
+            "normalized": "正字",
+            "category": "typo_fix",
+            "scope": "display_and_tts",
+            "confidence": 0.99,
+            "risk": "low",
+            "evidence": ["test"],
+        }]
+
+        ops = adapter._parse_operations(
+            raw_ops,
+            [
+                {"paragraph_id": "ch001_p001", "text": "第一段有错字。"},
+                {"paragraph_id": "ch001_p002", "text": "第二段也有错字。"},
+            ],
+            [0],
+        )
+
+        assert ops == []
+
 
 class TestPipelineIntegration:
     @pytest.mark.asyncio
@@ -189,3 +240,64 @@ class TestPipelineIntegration:
         store = ProjectStore(str(tmp_path / "test.sqlite"))
         with pytest.raises(ValueError, match="adaptation_policy"):
             Pipeline(store=store, output_dir=str(tmp_path), adaptation_policy="invalid")
+
+    @pytest.mark.asyncio
+    async def test_pipeline_applies_llm_display_operations(self, tmp_path):
+        import json
+
+        from vn_core.pipeline.pipeline import Pipeline
+        from vn_core.store import ProjectStore
+
+        class AdaptationBackend:
+            async def generate(self, request):
+                if request.task == "text_adaptation":
+                    content = json.dumps([
+                        {
+                            "op_id": "op_001",
+                            "segment_id": "ch001_p001",
+                            "original": "在也",
+                            "normalized": "再也",
+                            "category": "typo_fix",
+                            "scope": "display_and_tts",
+                            "confidence": 0.99,
+                            "risk": "low",
+                            "evidence": ["test"],
+                        }
+                    ], ensure_ascii=False)
+                    return LLMResponse(
+                        task=request.task,
+                        content=content,
+                        model="fake",
+                    )
+                return LLMResponse(task=request.task, content="{}", model="fake")
+
+        store = ProjectStore(str(tmp_path / "test.sqlite"))
+        store.initialize()
+        store.upsert_book("book_001")
+        store.upsert_chapter("book_001", "ch001", chapter_order=1)
+        store.upsert_paragraph(
+            "book_001",
+            "ch001",
+            "ch001_p001",
+            "他在也没有回来。",
+            source_order=1,
+        )
+        llm = LLMGateway()
+        llm.register_backend("fake", AdaptationBackend(), set_default=True)
+        pipeline = Pipeline(
+            store=store,
+            llm=llm,
+            output_dir=str(tmp_path),
+            tts_engine="mock",
+            audio_codec="wav",
+            adaptation_policy="balanced",
+        )
+
+        try:
+            result = await pipeline.bake_chapter("book_001", "ch001", force=True)
+        finally:
+            store.close()
+
+        assert result.success is True
+        assert "再也" in result.cleaned_html
+        assert "在也" not in result.cleaned_html

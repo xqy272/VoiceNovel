@@ -94,6 +94,36 @@ class TestAudioTakeCacheKey:
         k2 = audio_take_cache_key("s001", "text", "v1", "edge_tts")
         assert k1 != k2
 
+    def test_format_change_changes_key(self):
+        k1 = audio_take_cache_key("s001", "text", "v1", "mock", format="wav")
+        k2 = audio_take_cache_key("s001", "text", "v1", "mock", format="mp3")
+        assert k1 != k2
+
+    def test_pronunciation_context_change_changes_key(self):
+        k1 = audio_take_cache_key(
+            "s001",
+            "text",
+            "v1",
+            "mock",
+            pronunciation={
+                "system_lexicon_version": "1.0.1",
+                "user_lexicon_version": "1.0",
+                "pronunciation_fingerprint": "a",
+            },
+        )
+        k2 = audio_take_cache_key(
+            "s001",
+            "text",
+            "v1",
+            "mock",
+            pronunciation={
+                "system_lexicon_version": "1.0.1",
+                "user_lexicon_version": "1.0",
+                "pronunciation_fingerprint": "b",
+            },
+        )
+        assert k1 != k2
+
     def test_cache_buster_changes_key(self):
         k1 = audio_take_cache_key("s001", "text", "v1", "mock", cache_buster="a")
         k2 = audio_take_cache_key("s001", "text", "v1", "mock", cache_buster="b")

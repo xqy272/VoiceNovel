@@ -24,6 +24,7 @@ from vn_core.contracts.context_spec import ContextSpec
 from vn_core.contracts.reader_manifest import ReaderPackageManifest
 from vn_core.contracts.reading_plan import Enhancements, ReadingStyle, VoiceConstraints
 from vn_core.contracts.segment import Segment
+from vn_core.contracts.text_adaptation import AdaptationScope, TextAdaptationOperation
 from vn_core.contracts.timing_entry import TimingEntry
 from vn_core.harness import GateDecision, HarnessGate
 from vn_core.importers import import_book
@@ -104,7 +105,10 @@ class Pipeline:
         if audio_codec not in {"mp3", "wav"}:
             raise ValueError("audio_codec must be 'mp3' or 'wav'")
         if adaptation_policy not in {"conservative", "balanced", "aggressive", "off"}:
-            raise ValueError("adaptation_policy must be 'conservative', 'balanced', 'aggressive', or 'off'")
+            raise ValueError(
+                "adaptation_policy must be 'conservative', 'balanced', "
+                "'aggressive', or 'off'"
+            )
 
         if audio_codec == "mp3" and not ffmpeg_available():
             import warnings
@@ -438,7 +442,7 @@ class Pipeline:
         book_model = BookModel(self.store, book_id)
         all_segments = []
         adapted_texts: dict[str, str] = {}
-        all_adaptation_ops = []
+        all_adaptation_ops: list[TextAdaptationOperation] = []
 
         # Phase A: pre-segment rule-based adaptation + collect adapted paragraphs
         adapted_paragraphs = []
@@ -471,6 +475,8 @@ class Pipeline:
                     book_id, chapter_id, exc_info=True,
                 )
 
+        self._apply_paragraph_operations(adapted_paragraphs, all_adaptation_ops)
+
         # Phase C: segment + pre-tts adaptation
         for ap in adapted_paragraphs:
             segs = self.segmenter.segment_paragraph(
@@ -481,7 +487,13 @@ class Pipeline:
             )
             all_segments.extend(segs)
             for seg in segs:
-                tts_result = self.adapter.adapt_pre_tts(seg.segment_id, seg.text)
+                tts_base = self._apply_tts_operations(
+                    seg.text,
+                    all_adaptation_ops,
+                    seg.segment_id,
+                    seg.paragraph_id,
+                )
+                tts_result = self.adapter.adapt_pre_tts(seg.segment_id, tts_base)
                 if tts_result.operations:
                     all_adaptation_ops.extend(tts_result.operations)
                 adapted_texts[seg.segment_id] = tts_result.adapted_text
@@ -523,7 +535,9 @@ class Pipeline:
                     decisions=[
                         {
                             "segment_id": op.get("segment_id", chapter_id),
-                            "decision_type": "text_adaptation",
+                            "decision_type": (
+                                f"text_adaptation:{op.get('op_id', chapter_id)}"
+                            ),
                             "value": op,
                             "confidence": op.get("confidence", 0.99),
                             "source": op.get("source", "rule"),
@@ -633,11 +647,22 @@ class Pipeline:
             va = voice_assignments.get(entry.speaker_id)
             voice_id = va.voice_id if va else self.voice_registry.get_fallback_voice("narrator")
             tts_text = adapted_texts.get(entry.segment_id, entry.text)
-            at_ck = _at_key(
-                segment_id=entry.segment_id, text=tts_text,
+            tts_req = self.tts_composer.compose(
+                segment_id=entry.segment_id, tts_base_text=tts_text,
                 voice_id=voice_id, engine=self.tts_engine,
                 reading_style=entry.reading_style.model_dump(),
+                prosody_hint=entry.reading_style.prosody_hint,
+                format=self.audio_codec,
+            )
+            at_ck = _at_key(
+                segment_id=entry.segment_id,
+                text=tts_req.text,
+                voice_id=voice_id,
+                engine=self.tts_engine,
+                reading_style=entry.reading_style.model_dump(),
                 generation_config_id=self.generation_config_id,
+                format=tts_req.format,
+                pronunciation=self._pronunciation_cache_context(),
             )
             cached_at = self.store.find_artifact_by_cache_key(book_id, "audio_take", at_ck)
             if cached_at:
@@ -651,12 +676,6 @@ class Pipeline:
                     })
                     dur = get_audio_duration_ms(cp)
                     return entry.segment_id, None, cp, dur if dur else 800, at_ck
-            tts_req = self.tts_composer.compose(
-                segment_id=entry.segment_id, tts_base_text=tts_text,
-                voice_id=voice_id, engine=self.tts_engine,
-                reading_style=entry.reading_style.model_dump(),
-                prosody_hint=entry.reading_style.prosody_hint,
-            )
             async with semaphore:
                 tts_res = await self.tts_gateway.synthesize(tts_req)
             return entry.segment_id, tts_res, "", 0, at_ck
@@ -909,7 +928,7 @@ class Pipeline:
         book_model = BookModel(self.store, book_id)
         all_segments = []
         adapted_texts: dict[str, str] = {}
-        all_adaptation_ops = []
+        all_adaptation_ops: list[TextAdaptationOperation] = []
 
         # Phase A: pre-segment rule-based adaptation + collect adapted paragraphs
         adapted_paragraphs = []
@@ -942,6 +961,8 @@ class Pipeline:
                     book_id, chapter_id, exc_info=True,
                 )
 
+        self._apply_paragraph_operations(adapted_paragraphs, all_adaptation_ops)
+
         # Phase C: segment + pre-tts adaptation
         for ap in adapted_paragraphs:
             segs = self.segmenter.segment_paragraph(
@@ -952,7 +973,13 @@ class Pipeline:
             )
             all_segments.extend(segs)
             for seg in segs:
-                tts_result = self.adapter.adapt_pre_tts(seg.segment_id, seg.text)
+                tts_base = self._apply_tts_operations(
+                    seg.text,
+                    all_adaptation_ops,
+                    seg.segment_id,
+                    seg.paragraph_id,
+                )
+                tts_result = self.adapter.adapt_pre_tts(seg.segment_id, tts_base)
                 if tts_result.operations:
                     all_adaptation_ops.extend(tts_result.operations)
                 adapted_texts[seg.segment_id] = tts_result.adapted_text
@@ -993,7 +1020,9 @@ class Pipeline:
                     decisions=[
                         {
                             "segment_id": op.get("segment_id", chapter_id),
-                            "decision_type": "text_adaptation",
+                            "decision_type": (
+                                f"text_adaptation:{op.get('op_id', chapter_id)}"
+                            ),
                             "value": op,
                             "confidence": op.get("confidence", 0.99),
                             "source": op.get("source", "rule"),
@@ -1211,14 +1240,28 @@ class Pipeline:
             )
             tts_text = adapted_texts.get(entry.segment_id, entry.text)
 
-            # Content-based cache key — stable across bakes with same inputs
+            tts_request = self.tts_composer.compose(
+                segment_id=entry.segment_id,
+                tts_base_text=tts_text,
+                voice_id=voice_id,
+                engine=self.tts_engine,
+                reading_style=entry.reading_style.model_dump(),
+                prosody_hint=entry.reading_style.prosody_hint,
+                format=self.audio_codec,
+            )
+
+            # Content-based cache key — stable across bakes with same inputs.
+            # It uses final BackendSpeechRequest.text after pronunciation
+            # normalization, so lexicon changes invalidate stale audio.
             at_cache_key = _at_key(
                 segment_id=entry.segment_id,
-                text=tts_text,
+                text=tts_request.text,
                 voice_id=voice_id,
                 engine=self.tts_engine,
                 reading_style=entry.reading_style.model_dump(),
                 generation_config_id=self.generation_config_id,
+                format=tts_request.format,
+                pronunciation=self._pronunciation_cache_context(),
             )
             cached_at = self.store.find_artifact_by_cache_key(
                 book_id, "audio_take", at_cache_key,
@@ -1241,15 +1284,6 @@ class Pipeline:
                         measured if measured is not None else 800
                     ), at_cache_key
 
-            # Cache miss — call TTS
-            tts_request = self.tts_composer.compose(
-                segment_id=entry.segment_id,
-                tts_base_text=tts_text,
-                voice_id=voice_id,
-                engine=self.tts_engine,
-                reading_style=entry.reading_style.model_dump(),
-                prosody_hint=entry.reading_style.prosody_hint,
-            )
             async with semaphore:
                 tts_result = await self.tts_gateway.synthesize(tts_request)
             return entry.segment_id, tts_result, "", 0, at_cache_key
@@ -1590,6 +1624,74 @@ class Pipeline:
             "timing_entries": len(timing), "package_dir": str(pkg_dir),
         })
         return result
+
+    def _apply_paragraph_operations(
+        self,
+        adapted_paragraphs: list[dict],
+        operations: list[TextAdaptationOperation],
+    ):
+        """Apply approved display operations before segmentation."""
+        if not operations:
+            return
+
+        for paragraph in adapted_paragraphs:
+            paragraph_id = paragraph["paragraph_id"]
+            paragraph["text"] = self._apply_operations_for_targets(
+                paragraph["text"],
+                operations,
+                targets={paragraph_id},
+                allowed_scopes={
+                    AdaptationScope.display_and_tts.value,
+                    AdaptationScope.display_only.value,
+                },
+            )
+
+    def _apply_tts_operations(
+        self,
+        text: str,
+        operations: list[TextAdaptationOperation],
+        segment_id: str,
+        paragraph_id: str,
+    ) -> str:
+        """Apply TTS-only operations after segmentation."""
+        if not operations:
+            return text
+        return self._apply_operations_for_targets(
+            text,
+            operations,
+            targets={segment_id, paragraph_id},
+            allowed_scopes={AdaptationScope.tts_only.value},
+        )
+
+    @staticmethod
+    def _apply_operations_for_targets(
+        text: str,
+        operations: list[TextAdaptationOperation],
+        targets: set[str],
+        allowed_scopes: set[str],
+    ) -> str:
+        result = text
+        for op in operations:
+            target = getattr(op, "segment_id", "")
+            scope = getattr(op, "scope", "")
+            if isinstance(scope, AdaptationScope):
+                scope_value = scope.value
+            else:
+                scope_value = str(scope)
+            if target not in targets or scope_value not in allowed_scopes:
+                continue
+            original = getattr(op, "original", "")
+            normalized = getattr(op, "normalized", "")
+            if original and original in result:
+                result = result.replace(original, normalized, 1)
+        return result
+
+    def _pronunciation_cache_context(self) -> dict:
+        return {
+            "system_lexicon_version": self.pronunciation.system_version,
+            "user_lexicon_version": self.pronunciation.user_version,
+            "pronunciation_fingerprint": self.pronunciation.cache_fingerprint,
+        }
 
     def _apply_reading_profile(self, plan: list) -> list:
         if self.reading_profile == "enhanced":

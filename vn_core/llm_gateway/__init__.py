@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import importlib
 import json
 import os
 import time
@@ -28,11 +29,18 @@ class LLMRequest:
     prompt_name: str = ""
     prompt_version: str = ""
 
-    def compute_cache_key(self) -> str:
+    def compute_cache_key(
+        self,
+        backend_name: str = "",
+        backend_model: str = "",
+    ) -> str:
         if self.cache_key:
             return self.cache_key
+        context_payload = self.context_capsule or {}
         content = (
             f"{self.task}"
+            f"|{backend_name}"
+            f"|{backend_model}"
             f"|{self.model}"
             f"|{self.prompt_name}"
             f"|{self.prompt_version}"
@@ -41,6 +49,8 @@ class LLMRequest:
                 ensure_ascii=False,
             )}"
             f"|{self.temperature}"
+            f"|{self.max_tokens}"
+            f"|{json.dumps(context_payload, ensure_ascii=False, sort_keys=True)}"
         )
         return hashlib.sha256(content.encode()).hexdigest()[:40]
 
@@ -56,13 +66,23 @@ class LLMResponse:
     error: str = ""
 
 
-# Import backends lazily to avoid circular imports
-from vn_core.llm_gateway.backends import (
-    AnthropicLLMBackend,
-    DeepSeekLLMBackend,
-    MockLLMBackend,
-    OpenAILLMBackend,
-)
+_BACKEND_EXPORTS = {
+    "AnthropicLLMBackend",
+    "DeepSeekLLMBackend",
+    "MockLLMBackend",
+    "OpenAILLMBackend",
+}
+
+
+def _backend_class(name: str):
+    module = importlib.import_module("vn_core.llm_gateway.backends")
+    return getattr(module, name)
+
+
+def __getattr__(name: str):
+    if name in _BACKEND_EXPORTS:
+        return _backend_class(name)
+    raise AttributeError(name)
 
 
 class LLMGateway:
@@ -77,7 +97,7 @@ class LLMGateway:
         }
         self.prompt_registry = prompt_registry
 
-        self._backends["mock"] = MockLLMBackend()
+        self._backends["mock"] = _backend_class("MockLLMBackend")()
 
     def register_backend(self, name: str, backend: object, set_default: bool = False):
         self._backends[name] = backend
@@ -87,18 +107,21 @@ class LLMGateway:
     # ── convenience configurators ─────────────────────────────────────────
 
     def configure_openai(self, api_key: str, model: str = "gpt-4o-mini", base_url: str = ""):
+        OpenAILLMBackend = _backend_class("OpenAILLMBackend")
         backend = OpenAILLMBackend(api_key=api_key, model=model, base_url=base_url)
         self._backends["openai"] = backend
         if self._default_backend == "mock":
             self._default_backend = "openai"
 
     def configure_deepseek(self, api_key: str, model: str = "deepseek-chat"):
+        DeepSeekLLMBackend = _backend_class("DeepSeekLLMBackend")
         backend = DeepSeekLLMBackend(api_key=api_key, model=model)
         self._backends["deepseek"] = backend
         if self._default_backend == "mock":
             self._default_backend = "deepseek"
 
     def configure_claude(self, api_key: str, model: str = "claude-sonnet-4-6"):
+        AnthropicLLMBackend = _backend_class("AnthropicLLMBackend")
         backend = AnthropicLLMBackend(api_key=api_key, model=model)
         self._backends["claude"] = backend
         if self._default_backend == "mock":
@@ -114,7 +137,9 @@ class LLMGateway:
         if not provider:
             if api_key:
                 import warnings
-                warnings.warn("VN_LLM_API_KEY set but VN_LLM_PROVIDER not set; LLM will use mock")
+                warnings.warn(
+                    "VN_LLM_API_KEY set but VN_LLM_PROVIDER not set; LLM will use mock"
+                )
             return
         if not api_key:
             import warnings
@@ -130,6 +155,7 @@ class LLMGateway:
         elif provider in ("claude", "anthropic"):
             self.configure_claude(api_key, model=model or "claude-sonnet-4-6")
         elif base_url:
+            OpenAILLMBackend = _backend_class("OpenAILLMBackend")
             backend = OpenAILLMBackend(api_key=api_key, model=model or "default", base_url=base_url)
             self._backends[provider] = backend
             if self._default_backend == "mock":
@@ -179,7 +205,13 @@ class LLMGateway:
     # ── generate ──────────────────────────────────────────────────────────
 
     async def generate(self, request: LLMRequest) -> LLMResponse:
-        cache_key = request.compute_cache_key()
+        backend_name = request.model if request.model in self._backends else self._default_backend
+        backend = self._backends.get(backend_name)
+        backend_model = getattr(backend, "model", request.model or "")
+        cache_key = request.compute_cache_key(
+            backend_name=backend_name,
+            backend_model=backend_model,
+        )
         if cache_key in self._cache:
             cached = self._cache[cache_key]
             return LLMResponse(
@@ -187,8 +219,8 @@ class LLMGateway:
                 usage=cached.usage, latency_ms=cached.latency_ms, cached=True,
             )
 
-        backend_name = request.model if request.model in self._backends else self._default_backend
         result = await self._call_backend(backend_name, request)
+        used_backend = backend_name
 
         if result.error and backend_name != "mock":
             for fb_name in self._fallback_order:
@@ -196,14 +228,31 @@ class LLMGateway:
                     continue
                 result = await self._call_backend(fb_name, request)
                 if not result.error:
+                    used_backend = fb_name
                     break
 
-        if not result.error and backend_name != "mock" and result.model == "mock":
+        fallback_used = used_backend != backend_name
+        fallback_to_mock = backend_name != "mock" and used_backend == "mock"
+        if not result.error and fallback_to_mock:
             import warnings
-            warnings.warn(f"LLM fallback reached mock for task '{request.task}'; all real backends failed")
+            warnings.warn(
+                f"LLM fallback reached mock for task '{request.task}'; "
+                "all real backends failed"
+            )
 
-        if not result.error:
-            self._cache[cache_key] = result
+        if not result.error and not fallback_to_mock:
+            if fallback_used:
+                actual_backend = self._backends.get(used_backend)
+                actual_backend_model = getattr(
+                    actual_backend, "model", request.model or "",
+                )
+                actual_cache_key = request.compute_cache_key(
+                    backend_name=used_backend,
+                    backend_model=actual_backend_model,
+                )
+                self._cache[actual_cache_key] = result
+            else:
+                self._cache[cache_key] = result
 
         return result
 

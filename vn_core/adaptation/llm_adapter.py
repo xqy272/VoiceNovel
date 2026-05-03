@@ -171,14 +171,16 @@ class LLMTextAdapter:
         )
         if request is None:
             # No prompt registry available — use inline prompt
-            prompt = f"""You are a Chinese novel text editor. Analyze the given paragraphs and identify text issues
+            prompt = f"""You are a Chinese novel text editor.
+Analyze paragraphs and identify text issues
 that should be corrected for TTS (text-to-speech) reading and display.
 
-Categories: cleanup, punctuation, typo_fix, de_obfuscation, term_consistency, dialogue_fix, tts_normalization
+Categories: cleanup, punctuation, typo_fix, de_obfuscation, term_consistency,
+dialogue_fix, tts_normalization
 
-For each issue, output a JSON array of operations with: op_id, segment_id (paragraph_id), original,
-normalized, category, scope (display_and_tts or tts_only), confidence (0-1), risk (low/medium/high),
-evidence (array of reasons).
+For each issue, output a JSON array of operations with: op_id, segment_id
+(use the exact bracketed paragraph_id), original, normalized, category, scope
+(display_and_tts or tts_only), confidence (0-1), risk, evidence.
 
 Only report issues you are confident about. If the text is clean, return an empty array.
 Respond with only a JSON array, no other text.
@@ -236,9 +238,9 @@ Context: characters={character_names}, scene={scene_summary}, glossary={glossary
             if scope == AdaptationScope.suggest_only:
                 continue  # don't auto-apply suggestions
 
-            segment_id = raw.get("segment_id", paragraphs[0]["paragraph_id"])
-            if segment_id not in valid_ids:
-                segment_id = paragraphs[0]["paragraph_id"]
+            segment_id = self._resolve_paragraph_id(raw, paragraphs, valid_ids)
+            if not segment_id:
+                continue
 
             op_counter[0] += 1
             op = TextAdaptationOperation(
@@ -256,3 +258,28 @@ Context: characters={character_names}, scene={scene_summary}, glossary={glossary
             ops.append(op)
 
         return ops
+
+    @staticmethod
+    def _resolve_paragraph_id(
+        raw: dict,
+        paragraphs: list[dict],
+        valid_ids: set[str],
+    ) -> str | None:
+        requested = raw.get("segment_id") or raw.get("paragraph_id") or ""
+        if requested in valid_ids:
+            return requested
+
+        if len(paragraphs) == 1:
+            return paragraphs[0]["paragraph_id"]
+
+        original = raw.get("original", "")
+        if original:
+            matches = [
+                p["paragraph_id"]
+                for p in paragraphs
+                if original in p.get("text", "")
+            ]
+            if len(matches) == 1:
+                return matches[0]
+
+        return None

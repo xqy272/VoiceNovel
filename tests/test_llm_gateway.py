@@ -5,7 +5,13 @@ from unittest.mock import patch
 
 import pytest
 
-from vn_core.llm_gateway import LLMGateway, LLMMessage, LLMRequest, MockLLMBackend
+from vn_core.llm_gateway import (
+    LLMGateway,
+    LLMMessage,
+    LLMRequest,
+    LLMResponse,
+    MockLLMBackend,
+)
 from vn_core.llm_gateway.backends import (
     AnthropicLLMBackend,
     DeepSeekLLMBackend,
@@ -95,6 +101,85 @@ class TestLLMGateway:
         )
         response = await gateway.generate(request)
         assert response.error == ""
+
+    @pytest.mark.asyncio
+    async def test_mock_fallback_is_not_cached_as_real_backend_result(self):
+        class FailingBackend:
+            async def generate(self, request):
+                return LLMResponse(
+                    task=request.task,
+                    content="",
+                    model="failing",
+                    error="temporary outage",
+                )
+
+        class SuccessBackend:
+            async def generate(self, request):
+                return LLMResponse(
+                    task=request.task,
+                    content='{"ok": true}',
+                    model="real",
+                )
+
+        gateway = LLMGateway()
+        gateway.register_backend("openai", FailingBackend(), set_default=True)
+        request = LLMRequest(
+            task="speaker_attribution",
+            messages=[LLMMessage(role="user", content="test fallback cache")],
+        )
+
+        first = await gateway.generate(request)
+        assert first.model == "mock"
+
+        gateway.register_backend("openai", SuccessBackend(), set_default=True)
+        second = await gateway.generate(request)
+
+        assert second.model == "real"
+        assert second.cached is False
+
+    @pytest.mark.asyncio
+    async def test_real_fallback_is_not_cached_under_primary_backend(self):
+        class FailingBackend:
+            async def generate(self, request):
+                return LLMResponse(
+                    task=request.task,
+                    content="",
+                    model="primary",
+                    error="temporary outage",
+                )
+
+        class BackupBackend:
+            async def generate(self, request):
+                return LLMResponse(
+                    task=request.task,
+                    content='{"ok": "backup"}',
+                    model="backup",
+                )
+
+        class PrimaryBackend:
+            async def generate(self, request):
+                return LLMResponse(
+                    task=request.task,
+                    content='{"ok": "primary"}',
+                    model="primary",
+                )
+
+        gateway = LLMGateway()
+        gateway.register_backend("openai", FailingBackend(), set_default=True)
+        gateway.register_backend("deepseek", BackupBackend())
+        request = LLMRequest(
+            task="speaker_attribution",
+            messages=[LLMMessage(role="user", content="test real fallback cache")],
+        )
+
+        first = await gateway.generate(request)
+        assert first.model == "backup"
+
+        gateway.register_backend("openai", PrimaryBackend(), set_default=True)
+        second = await gateway.generate(request)
+
+        assert second.model == "primary"
+        assert second.cached is False
 
 
 class TestDeepSeekBackend:

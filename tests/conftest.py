@@ -51,13 +51,17 @@ def pytest_addoption(parser):
 
 
 def pytest_collection_modifyitems(config, items):
-    if config.getoption("--real-backends", default=False):
-        return
-
-    skip_tts = pytest.mark.skip(reason="requires --real-backends and real TTS backend")
-    skip_llm = pytest.mark.skip(reason="requires --real-backends and real LLM backend")
+    run_real = config.getoption("--real-backends", default=False)
+    skip_opt_in = pytest.mark.skip(reason="requires --real-backends")
+    skip_tts = pytest.mark.skip(reason="real TTS backend is not available")
+    skip_llm = pytest.mark.skip(reason="real LLM backend is not available")
 
     for item in items:
+        needs_tts = "real_tts" in item.keywords
+        needs_llm = "real_llm" in item.keywords
+        if (needs_tts or needs_llm) and not run_real:
+            item.add_marker(skip_opt_in)
+            continue
         if "real_tts" in item.keywords:
             if not has_real_tts():
                 item.add_marker(skip_tts)

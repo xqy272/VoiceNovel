@@ -15,7 +15,6 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 
 @dataclass
@@ -34,8 +33,8 @@ class PromptDefinition:
             return ""
         try:
             return self.system_template.format(**kwargs)
-        except KeyError as e:
-            return self.system_template.replace("{", "{{").replace("}", "}}").format(**{k: v for k, v in kwargs.items() if k in str(e) or True})
+        except KeyError:
+            return self.system_template
         except Exception:
             return self.system_template
 
@@ -87,7 +86,10 @@ class PromptRegistry:
             return None
         if version:
             return versions.get(version)
-        sorted_versions = sorted(versions.keys(), key=lambda v: tuple(map(int, v.split("."))))
+        sorted_versions = sorted(
+            versions.keys(),
+            key=lambda v: tuple(map(int, v.split("."))),
+        )
         return versions[sorted_versions[-1]]
 
     def list_prompts(self) -> list[str]:
@@ -98,7 +100,10 @@ class PromptRegistry:
         """List all versions for a given prompt name."""
         if name not in self._prompts:
             return []
-        return sorted(self._prompts[name].keys(), key=lambda v: tuple(map(int, v.split("."))))
+        return sorted(
+            self._prompts[name].keys(),
+            key=lambda v: tuple(map(int, v.split("."))),
+        )
 
     # ── YAML loading ──────────────────────────────────────────────────────
 
@@ -126,11 +131,20 @@ class PromptRegistry:
             meta = entry.get("meta", {})
             for version_info in entry.get("versions", []):
                 version = version_info.get("version", "0.1.0")
-                model_family = version_info.get("model_family", meta.get("model_family", "openai"))
+                model_family = version_info.get(
+                    "model_family",
+                    meta.get("model_family", "openai"),
+                )
 
                 # Resolve templates: version can override, fall back to meta defaults
-                system_template = version_info.get("system_template", meta.get("system_template", ""))
-                user_template = version_info.get("user_template", meta.get("user_template", "{input}"))
+                system_template = version_info.get(
+                    "system_template",
+                    meta.get("system_template", ""),
+                )
+                user_template = version_info.get(
+                    "user_template",
+                    meta.get("user_template", "{input}"),
+                )
                 output_schema = version_info.get("output_schema", meta.get("output_schema", {}))
                 description = version_info.get("description", meta.get("description", ""))
 

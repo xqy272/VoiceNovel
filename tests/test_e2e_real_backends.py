@@ -94,8 +94,11 @@ class TestRealLLMBackend:
             messages=[
                 LLMMessage(
                     role="system",
-                    content="""You are analyzing a Chinese novel. For the given text, identify the speaker.
-Output JSON with: speaker_candidate, speaker_id, speaker_confidence (0-1), reading_style{emotion, intensity, prosody_hint}, evidence[]""",
+                    content=(
+                        "You are analyzing a Chinese novel. Identify the speaker. "
+                        "Output JSON with speaker_candidate, speaker_id, "
+                        "speaker_confidence, reading_style, and evidence."
+                    ),
                 ),
                 LLMMessage(
                     role="user",
@@ -133,8 +136,10 @@ Output JSON with: speaker_candidate, speaker_id, speaker_confidence (0-1), readi
             messages=[
                 LLMMessage(
                     role="system",
-                    content="""Extract characters from the Chinese novel text.
-Output JSON with: characters[{name, aliases[], traits[], first_seen_in_text}], glossary[{term, category, definition}]""",
+                    content=(
+                        "Extract characters from the Chinese novel text. "
+                        "Output JSON with characters and glossary arrays."
+                    ),
                 ),
                 LLMMessage(role="user", content=text),
             ],
@@ -215,4 +220,7 @@ class TestFullPipelineRealBackends:
                         assert _audio_has_content(str(audio_file)), \
                             f"Audio is silent: {audio_file} ({audio_file.stat().st_size} bytes)"
         else:
-            pytest.fail(f"No package dirs found under {packages_dir} (contents: {list(packages_dir.iterdir())})")
+            pytest.fail(
+                f"No package dirs found under {packages_dir} "
+                f"(contents: {list(packages_dir.iterdir())})"
+            )

@@ -7,7 +7,7 @@ import wave
 from pathlib import Path
 
 from vn_core.contracts.speech_request import BackendSpeechRequest
-from vn_core.render.cosyvoice_adapter import CosyVoiceAdapter
+from vn_core.render.cosyvoice_adapter import CosyVoiceAdapter as CosyVoiceAdapter
 from vn_core.render.result import TTSResult
 
 
