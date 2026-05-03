@@ -844,6 +844,38 @@ class ProjectStore:
         )
         conn.commit()
 
+    # ── pronunciation overrides ──────────────────────────────────────────
+
+    def get_pronunciation_overrides(self, book_id: str) -> list[dict]:
+        conn = self._get_conn()
+        rows = conn.execute(
+            "SELECT * FROM pronunciation_overrides WHERE book_id=?",
+            (book_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def upsert_pronunciation_override(
+        self, book_id: str, text: str, reading: str,
+        scope: str = "tts_only", confidence: float = 1.0,
+        status: str = "inferred", created_by: str = "", run_id: str = "",
+    ):
+        conn = self._get_conn()
+        conn.execute(
+            """INSERT OR REPLACE INTO pronunciation_overrides
+            (book_id, text, reading, scope, confidence, status, created_by, run_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (book_id, text, reading, scope, confidence, status, created_by, run_id),
+        )
+        conn.commit()
+
+    def delete_pronunciation_override(self, book_id: str, text: str):
+        conn = self._get_conn()
+        conn.execute(
+            "DELETE FROM pronunciation_overrides WHERE book_id=? AND text=?",
+            (book_id, text),
+        )
+        conn.commit()
+
     def upsert_voice_assignment(self, book_id: str, character_id: str,
                                 voice_id: str, confidence: float = 1.0,
                                 user_locked: bool = False, source: str = "auto",

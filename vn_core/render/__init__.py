@@ -4,22 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import wave
-from dataclasses import dataclass
 from pathlib import Path
 
 from vn_core.contracts.speech_request import BackendSpeechRequest
-
-
-@dataclass
-class TTSResult:
-    request_id: str
-    segment_id: str
-    audio_path: str
-    duration_ms: float = 0.0
-    engine: str = ""
-    voice_id: str = ""
-    status: str = "success"
-    error: str = ""
+from vn_core.render.cosyvoice_adapter import CosyVoiceAdapter
+from vn_core.render.result import TTSResult
 
 
 class MockTTSAdapter:

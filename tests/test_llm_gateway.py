@@ -1,8 +1,15 @@
 """Tests for LLM Gateway module."""
 
+import os
+from unittest.mock import patch
+
 import pytest
 
 from vn_core.llm_gateway import LLMGateway, LLMMessage, LLMRequest, MockLLMBackend
+from vn_core.llm_gateway.backends import (
+    AnthropicLLMBackend,
+    DeepSeekLLMBackend,
+)
 
 
 @pytest.fixture
@@ -88,3 +95,108 @@ class TestLLMGateway:
         )
         response = await gateway.generate(request)
         assert response.error == ""
+
+
+class TestDeepSeekBackend:
+    def test_construction_defaults(self):
+        backend = DeepSeekLLMBackend(api_key="sk-test")
+        assert backend.engine == "deepseek"
+        assert backend.model == "deepseek-chat"
+        assert "api.deepseek.com" in backend.base_url
+
+    def test_missing_api_key_returns_error(self):
+        backend = DeepSeekLLMBackend(api_key="")
+        request = LLMRequest(
+            task="test",
+            messages=[LLMMessage(role="user", content="hello")],
+        )
+
+        async def _run():
+            resp = await backend.generate(request)
+            assert resp.error != ""
+            assert resp.content == ""
+
+        import asyncio
+        asyncio.run(_run())
+
+
+class TestAnthropicBackend:
+    def test_construction_defaults(self):
+        backend = AnthropicLLMBackend(api_key="sk-test")
+        assert backend.engine == "claude"
+        assert "claude" in backend.model
+
+    def test_missing_api_key_returns_error(self):
+        backend = AnthropicLLMBackend(api_key="")
+        request = LLMRequest(
+            task="test",
+            messages=[LLMMessage(role="user", content="hello")],
+        )
+
+        async def _run():
+            resp = await backend.generate(request)
+            assert resp.error != ""
+
+        import asyncio
+        asyncio.run(_run())
+
+
+class TestEnvVarConfiguration:
+    def test_configure_from_env_openai(self):
+        gateway = LLMGateway()
+        with patch.dict(os.environ, {
+            "VN_LLM_PROVIDER": "openai",
+            "VN_LLM_API_KEY": "sk-test",
+            "VN_LLM_MODEL": "gpt-4o",
+        }):
+            gateway.configure_from_env()
+        assert gateway._default_backend == "openai"
+        assert "openai" in gateway._backends
+
+    def test_configure_from_env_deepseek(self):
+        gateway = LLMGateway()
+        with patch.dict(os.environ, {
+            "VN_LLM_PROVIDER": "deepseek",
+            "VN_LLM_API_KEY": "sk-test",
+        }):
+            gateway.configure_from_env()
+        assert gateway._default_backend == "deepseek"
+        assert "deepseek" in gateway._backends
+
+    def test_configure_from_env_claude(self):
+        gateway = LLMGateway()
+        with patch.dict(os.environ, {
+            "VN_LLM_PROVIDER": "claude",
+            "VN_LLM_API_KEY": "sk-test",
+        }):
+            gateway.configure_from_env()
+        assert gateway._default_backend == "claude"
+        assert "claude" in gateway._backends
+
+    def test_configure_from_env_no_provider_noop(self):
+        gateway = LLMGateway()
+        gateway.configure_from_env()
+        assert gateway._default_backend == "mock"
+
+    def test_configure_from_env_custom_base_url(self):
+        gateway = LLMGateway()
+        with patch.dict(os.environ, {
+            "VN_LLM_PROVIDER": "custom_provider",
+            "VN_LLM_API_KEY": "sk-test",
+            "VN_LLM_BASE_URL": "https://custom.api.com/v1",
+        }):
+            gateway.configure_from_env()
+        assert "custom_provider" in gateway._backends
+        assert gateway._default_backend == "custom_provider"
+
+    def test_configure_deepseek_convenience(self):
+        gateway = LLMGateway()
+        gateway.configure_deepseek(api_key="sk-test")
+        assert "deepseek" in gateway._backends
+        assert gateway._default_backend == "deepseek"
+
+    def test_configure_claude_convenience(self):
+        gateway = LLMGateway()
+        gateway.configure_claude(api_key="sk-test")
+        assert "claude" in gateway._backends
+        assert gateway._default_backend == "claude"

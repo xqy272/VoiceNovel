@@ -25,7 +25,7 @@ class ContextFetchEngine:
         capsule.target_segments = self._load_target_segments(spec)
         capsule.left_context, capsule.right_context = self._load_text_context(spec)
         capsule.active_characters = self._load_characters(spec)
-        capsule.scene_summary = self._load_scene_summary(spec)
+        capsule.scene_summary, capsule.recent_dialogue_state = self._load_scene_state(spec)
         capsule.glossary_terms = self._load_glossary(spec)
         capsule.pronunciation_overrides = self._load_pronunciation(spec)
         capsule.prior_decisions = self._load_decisions(spec)
@@ -117,16 +117,24 @@ class ContextFetchEngine:
             ]
         return characters
 
-    def _load_scene_summary(self, spec: ContextSpec) -> str:
+    def _load_scene_state(self, spec: ContextSpec) -> tuple[str, dict]:
+        """Load scene summary and rich dialogue state from snapshot."""
         if not spec.scene_state or not spec.chapter_id or not self.book_model:
-            return ""
+            return "", {}
         snapshot = self.book_model.get_scene_snapshot(spec.chapter_id)
         if snapshot and snapshot.get("snapshot_data"):
             data = snapshot["snapshot_data"]
             if isinstance(data, str):
                 data = json.loads(data)
-            return data.get("summary", "")
-        return ""
+            summary = data.get("summary", "")
+            dialogue_state = {
+                "last_speaker": data.get("last_speaker"),
+                "last_addressee": data.get("last_addressee"),
+                "turn_pattern": data.get("turn_pattern", "none"),
+                "character_turn_counts": data.get("character_turn_counts", {}),
+            }
+            return summary, dialogue_state
+        return "", {}
 
     def _load_glossary(self, spec: ContextSpec) -> list[dict]:
         if not spec.glossary:

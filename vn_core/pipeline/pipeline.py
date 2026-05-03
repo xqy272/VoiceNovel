@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Callable, Coroutine
 
 from vn_core.adaptation import TextAdapter
+from vn_core.adaptation.llm_adapter import AdaptationPolicy, LLMTextAdapter
 from vn_core.book_model import BookModel
 from vn_core.context import ContextFetchEngine
 from vn_core.contracts.context_spec import ContextSpec
@@ -30,6 +31,7 @@ from vn_core.llm_gateway import LLMGateway
 from vn_core.orchestration import Orchestrator
 from vn_core.packaging import PackagingService
 from vn_core.planner import ReadingPlanner
+from vn_core.pronunciation import PronunciationEngine
 from vn_core.render import SpeechGateway
 from vn_core.render.tts_input_composer import TTSInputComposer
 from vn_core.scanner import BookScanner
@@ -94,17 +96,33 @@ class Pipeline:
         tts_engine: str = "mock",
         generation_config_id: str = "default",
         reading_profile: str = "enhanced",
+        audio_codec: str = "mp3",
+        adaptation_policy: str = "conservative",
     ):
         if reading_profile not in {"faithful", "enhanced"}:
             raise ValueError("reading_profile must be 'faithful' or 'enhanced'")
+        if audio_codec not in {"mp3", "wav"}:
+            raise ValueError("audio_codec must be 'mp3' or 'wav'")
+        if adaptation_policy not in {"conservative", "balanced", "aggressive", "off"}:
+            raise ValueError("adaptation_policy must be 'conservative', 'balanced', 'aggressive', or 'off'")
+
+        if audio_codec == "mp3" and not ffmpeg_available():
+            import warnings
+            warnings.warn("ffmpeg not available, falling back to WAV output")
+            audio_codec = "wav"
 
         self.store = store
         self.llm = llm or LLMGateway()
         self.segmenter = ChineseSegmenter()
         self.adapter = TextAdapter()
+        self.llm_adapter = (
+            LLMTextAdapter(self.llm, policy=AdaptationPolicy(adaptation_policy))
+            if adaptation_policy != "off" else None
+        )
         self.planner = ReadingPlanner(llm=self.llm)
         self.voice_registry = VoiceRegistry()
-        self.tts_composer = TTSInputComposer()
+        self.pronunciation = PronunciationEngine()
+        self.tts_composer = TTSInputComposer(pronunciation_engine=self.pronunciation)
         self.tts_gateway = gateway or SpeechGateway(output_dir=str(Path(output_dir) / "tts"))
         self.pkg_service = PackagingService()
         self.harness = HarnessGate()
@@ -115,6 +133,7 @@ class Pipeline:
         self.tts_engine = tts_engine
         self.generation_config_id = generation_config_id
         self.reading_profile = reading_profile
+        self.audio_codec = audio_codec
         self._progress_callbacks: list[ProgressCallback] = []
 
     def on_progress(self, callback: ProgressCallback):
@@ -415,21 +434,50 @@ class Pipeline:
             result.success = False
             return result
 
+        self.pronunciation.set_book(book_id, self.store)
         book_model = BookModel(self.store, book_id)
         all_segments = []
         adapted_texts: dict[str, str] = {}
         all_adaptation_ops = []
+
+        # Phase A: pre-segment rule-based adaptation + collect adapted paragraphs
+        adapted_paragraphs = []
         for p in paragraphs:
             pre_result = self.adapter.adapt_pre_segment(
                 f"{p['paragraph_id']}_pre", p["text"],
             )
             if pre_result.operations:
                 all_adaptation_ops.extend(pre_result.operations)
+            adapted_paragraphs.append({
+                "paragraph_id": p["paragraph_id"],
+                "text": pre_result.adapted_text,
+                "source_href": p.get("source_href", ""),
+                "source_order": p.get("source_order", 0),
+                "source_dom_hint": p.get("source_dom_hint", ""),
+            })
+
+        # Phase B: LLM-driven adaptation (batch, skip if no real LLM or policy=off)
+        if self.llm_adapter and self.llm._default_backend != "mock":
+            try:
+                llm_result = await self.llm_adapter.adapt_paragraphs_batch(
+                    adapted_paragraphs,
+                )
+                if llm_result.operations:
+                    all_adaptation_ops.extend(llm_result.operations)
+            except Exception:
+                import logging
+                logging.getLogger("vn_core").warning(
+                    "LLM adaptation failed for %s/%s, continuing with rule-based only",
+                    book_id, chapter_id, exc_info=True,
+                )
+
+        # Phase C: segment + pre-tts adaptation
+        for ap in adapted_paragraphs:
             segs = self.segmenter.segment_paragraph(
-                p["paragraph_id"], pre_result.adapted_text,
-                source_href=p.get("source_href", ""),
-                source_order=p.get("source_order", 0),
-                source_dom_hint=p.get("source_dom_hint", ""),
+                ap["paragraph_id"], ap["text"],
+                source_href=ap["source_href"],
+                source_order=ap["source_order"],
+                source_dom_hint=ap["source_dom_hint"],
             )
             all_segments.extend(segs)
             for seg in segs:
@@ -696,8 +744,8 @@ class Pipeline:
         cleaned_html = wrap_full_document(cleaned_body, book_id=book_id)
 
         # --- package window ---
-        codec = "mp3" if ffmpeg_available() else "wav"
-        ext = "mp3" if ffmpeg_available() else "wav"
+        codec = self.audio_codec
+        ext = self.audio_codec
         pkg_dir = self.output_dir / "packages" / book_id / window_id
         pkg_dir.mkdir(parents=True, exist_ok=True)
 
@@ -715,7 +763,7 @@ class Pipeline:
             adir = pkg_dir / "audio"
             adir.mkdir(parents=True, exist_ok=True)
             apath = adir / f"{window_id}.{ext}"
-            if ffmpeg_available():
+            if self.audio_codec == "mp3":
                 assemble_chapter_mp3(
                     segment_ids=[s.segment_id for s in window_segments],
                     audio_paths=audio_paths, timing_entries=timing,
@@ -857,23 +905,50 @@ class Pipeline:
             ))
             return result
 
+        self.pronunciation.set_book(book_id, self.store)
         book_model = BookModel(self.store, book_id)
-
-        # Stage: segment + adapt
         all_segments = []
         adapted_texts: dict[str, str] = {}
         all_adaptation_ops = []
+
+        # Phase A: pre-segment rule-based adaptation + collect adapted paragraphs
+        adapted_paragraphs = []
         for p in paragraphs:
             pre_result = self.adapter.adapt_pre_segment(
                 f"{p['paragraph_id']}_pre", p["text"],
             )
             if pre_result.operations:
                 all_adaptation_ops.extend(pre_result.operations)
+            adapted_paragraphs.append({
+                "paragraph_id": p["paragraph_id"],
+                "text": pre_result.adapted_text,
+                "source_href": p.get("source_href", ""),
+                "source_order": p.get("source_order", 0),
+                "source_dom_hint": p.get("source_dom_hint", ""),
+            })
+
+        # Phase B: LLM-driven adaptation (skip if no real LLM or policy=off)
+        if self.llm_adapter and self.llm._default_backend != "mock":
+            try:
+                llm_result = await self.llm_adapter.adapt_paragraphs_batch(
+                    adapted_paragraphs,
+                )
+                if llm_result.operations:
+                    all_adaptation_ops.extend(llm_result.operations)
+            except Exception:
+                import logging
+                logging.getLogger("vn_core").warning(
+                    "LLM adaptation failed for %s/%s, continuing with rule-based only",
+                    book_id, chapter_id, exc_info=True,
+                )
+
+        # Phase C: segment + pre-tts adaptation
+        for ap in adapted_paragraphs:
             segs = self.segmenter.segment_paragraph(
-                p["paragraph_id"], pre_result.adapted_text,
-                source_href=p.get("source_href", ""),
-                source_order=p.get("source_order", 0),
-                source_dom_hint=p.get("source_dom_hint", ""),
+                ap["paragraph_id"], ap["text"],
+                source_href=ap["source_href"],
+                source_order=ap["source_order"],
+                source_dom_hint=ap["source_dom_hint"],
             )
             all_segments.extend(segs)
             for seg in segs:
@@ -1276,7 +1351,7 @@ class Pipeline:
 
         # Stage: timing
         await self._emit("timing_start", {"book_id": book_id, "chapter_id": chapter_id})
-        chapter_audio_codec = "mp3" if ffmpeg_available() else "wav"
+        chapter_audio_codec = self.audio_codec
         timing = build_timing(
             segment_ids=[s.segment_id for s in all_segments],
             segment_durations_ms=[
@@ -1328,11 +1403,11 @@ class Pipeline:
         if audio_paths:
             audio_dir = pkg_dir / "audio"
             audio_dir.mkdir(parents=True, exist_ok=True)
-            codec = "mp3" if ffmpeg_available() else "wav"
-            chapter_audio_ext = "mp3" if ffmpeg_available() else "wav"
+            codec = self.audio_codec
+            chapter_audio_ext = self.audio_codec
             chapter_audio_path = audio_dir / f"{chapter_id}.{chapter_audio_ext}"
             try:
-                if ffmpeg_available():
+                if self.audio_codec == "mp3":
                     assemble_chapter_mp3(
                         segment_ids=[s.segment_id for s in all_segments],
                         audio_paths=audio_paths,

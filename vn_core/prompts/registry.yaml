@@ -1,0 +1,196 @@
+prompts:
+  character_extraction:
+    meta:
+      description: "Extract named characters and glossary terms from Chinese novel text"
+      model_family: "openai"
+    versions:
+      - version: "1.0.0"
+        description: "Initial version — extract characters with aliases, traits, and glossary terms"
+        system_template: |
+          Analyze this Chinese novel text and extract all named characters.
+
+          For each character, provide:
+          - name: the primary name used in the text
+          - aliases: list of other names/titles used for this character
+          - traits: list of personality/physical traits (use "male"/"female" for gender)
+          - first_seen: chapter or section where character first appears
+
+          Also extract any notable glossary terms (techniques, locations, organizations, items).
+
+          Respond in JSON format exactly as shown:
+          {
+            "characters": [
+              {"name": "陆明", "aliases": ["少主", "陆公子"],
+               "traits": ["male", "young", "determined"], "first_seen": "ch001"}
+            ],
+            "glossary": [
+              {"term": "剑法", "definition": "martial arts sword technique", "category": "skill"}
+            ]
+          }
+
+          Text:
+        user_template: "{input}"
+        output_schema:
+          type: object
+          properties:
+            characters:
+              type: array
+              items:
+                type: object
+                properties:
+                  name: { type: string }
+                  aliases: { type: array, items: { type: string } }
+                  traits: { type: array, items: { type: string } }
+                  first_seen: { type: string }
+            glossary:
+              type: array
+              items:
+                type: object
+                properties:
+                  term: { type: string }
+                  definition: { type: string }
+                  category: { type: string }
+
+  scene_summary:
+    meta:
+      description: "Summarize a chapter scene with active characters, location, and key events"
+      model_family: "openai"
+    versions:
+      - version: "1.0.0"
+        description: "Initial version — 2-3 sentence summary with character list and events"
+        system_template: |
+          Summarize this chapter in 2-3 sentences, focusing on:
+          1. Which characters are active (present and speaking)
+          2. The main location/setting
+          3. Key events or plot developments
+
+          Also list the active characters as an array of their names.
+
+          Respond in JSON:
+          {
+            "summary": "...",
+            "active_characters": ["name1", "name2"],
+            "location": "...",
+            "key_events": ["event1", "event2"]
+          }
+
+          Chapter text:
+        user_template: "{input}"
+        output_schema:
+          type: object
+          properties:
+            summary: { type: string }
+            active_characters: { type: array, items: { type: string } }
+            location: { type: string }
+            key_events: { type: array, items: { type: string } }
+
+  speaker_attribution:
+    meta:
+      description: "Identify who is speaking in a Chinese novel dialogue segment"
+      model_family: "openai"
+    versions:
+      - version: "1.0.0"
+        description: "Initial version — speaker identification with emotion and prosody"
+        system_template: ""
+        user_template: |
+          Analyze this Chinese novel segment and determine who is speaking.
+
+          Segment: {segment_text}
+
+          Recent context:
+          {context_text}
+
+          Known characters:
+          {known_characters}
+
+          Respond in JSON:
+          {{
+            "speaker_candidate": "name or null",
+            "speaker_id": "character_id or char_narrator",
+            "speaker_confidence": 0.0-1.0,
+            "emotion": "neutral/happy/sad/angry/fearful/restrained/excited/calm",
+            "intensity": 0.0-1.0,
+            "prosody_hint": "short_pause/normal_pause/long_pause",
+            "evidence": ["reason1", "reason2"]
+          }}
+        output_schema:
+          type: object
+          properties:
+            speaker_candidate: { type: string }
+            speaker_id: { type: string }
+            speaker_confidence: { type: number }
+            emotion: { type: string, enum: [neutral, happy, sad, angry, fearful, restrained, excited, calm] }
+            intensity: { type: number }
+            prosody_hint: { type: string, enum: [short_pause, normal_pause, long_pause] }
+            evidence: { type: array, items: { type: string } }
+
+  text_adaptation:
+    meta:
+      description: "Detect and fix text issues in Chinese novel paragraphs (typos, de-obfuscation, etc.)"
+      model_family: "openai"
+    versions:
+      - version: "1.0.0"
+        description: "Initial version — balanced adaptation policy for Chinese web novels"
+        system_template: |
+          You are a Chinese novel text editor. Analyze the given paragraph and identify text issues
+          that should be corrected for TTS (text-to-speech) reading and display.
+
+          Categories of issues to detect:
+          - cleanup: encoding issues, garbled text, OCR noise, repeated spaces, abnormal line breaks
+          - punctuation: missing/broken quotation marks, mixed Chinese/English punctuation, dialogue punctuation errors
+          - typo_fix: input method errors, OCR confusions, intentional misspellings
+          - de_obfuscation: web novel evasion patterns (letter abbreviations, pinyin abbreviations,
+            character splitting, symbol substitution, homophone substitution)
+          - term_consistency: sect/skill/location/organization/title names should be consistent
+          - dialogue_fix: dialogue punctuation, appellation, pronoun, context-carry-forward for speaker attribution
+          - tts_normalization: numbers, years, units, English abbreviations, personal/place names, polyphonic chars
+
+          For each issue found, output a JSON array of operations. Each operation must have:
+          - op_id: unique id (op_001, op_002, ...)
+          - segment_id: the segment this applies to (use "paragraph")
+          - original: the original text substring to replace
+          - normalized: the corrected text
+          - category: one of the categories above
+          - scope: "display_and_tts" (most cases), "tts_only" (pronunciation only), or "suggest_only" (uncertain)
+          - confidence: 0.0 to 1.0
+          - risk: "low", "medium", or "high"
+          - evidence: array of reasons supporting this change
+
+          Only report issues you are confident about. If the paragraph is clean, return an empty array.
+
+          Output format:
+          [
+            {
+              "op_id": "op_001",
+              "segment_id": "paragraph",
+              "original": "ZF",
+              "normalized": "政府",
+              "category": "de_obfuscation",
+              "scope": "display_and_tts",
+              "confidence": 0.92,
+              "risk": "medium",
+              "evidence": ["context discusses administration", "character refers to it as official"]
+            }
+          ]
+        user_template: |
+          Paragraph text:
+          {paragraph_text}
+
+          Context:
+          - Active characters: {character_names}
+          - Scene: {scene_summary}
+          - Glossary terms: {glossary_terms}
+        output_schema:
+          type: array
+          items:
+            type: object
+            properties:
+              op_id: { type: string }
+              segment_id: { type: string }
+              original: { type: string }
+              normalized: { type: string }
+              category: { type: string, enum: [cleanup, punctuation, typo_fix, de_obfuscation, term_consistency, dialogue_fix, tts_normalization] }
+              scope: { type: string, enum: [display_and_tts, tts_only, display_only, suggest_only] }
+              confidence: { type: number }
+              risk: { type: string, enum: [low, medium, high] }
+              evidence: { type: array, items: { type: string } }

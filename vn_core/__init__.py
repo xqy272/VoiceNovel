@@ -1,6 +1,7 @@
 """VoiceNovel Core: AI multi-role audiobook system core."""
 
 from vn_core.adaptation import AdaptationResult, TextAdapter, basic_cleanup
+from vn_core.adaptation.llm_adapter import AdaptationPolicy, LLMTextAdapter
 from vn_core.book_model import BookModel
 from vn_core.context import ContextFetchEngine
 from vn_core.contracts.audio_take import AudioTake
@@ -25,11 +26,24 @@ from vn_core.export.m4b import export_m4b
 from vn_core.harness import GateDecision, GateResult, HarnessGate
 from vn_core.importers import ImportedChapter, SourceParagraph, import_book, import_epub, import_txt
 from vn_core.llm_gateway import LLMGateway, LLMMessage, LLMRequest
+from vn_core.llm_gateway.backends import (
+    AnthropicLLMBackend,
+    DeepSeekLLMBackend,
+    MockLLMBackend,
+    OpenAILLMBackend,
+)
 from vn_core.orchestration import ExecutionMode, Orchestrator, OrchestratorConfig
 from vn_core.packaging import PackagingService
 from vn_core.planner import ReadingPlanner
 from vn_core.preflight import PreflightCheck, PreflightResult
-from vn_core.render import EdgeTTSAdapter, MockTTSAdapter, SpeechGateway, TTSResult
+from vn_core.prompts import PromptDefinition, PromptRegistry
+from vn_core.render import (
+    CosyVoiceAdapter,
+    EdgeTTSAdapter,
+    MockTTSAdapter,
+    SpeechGateway,
+    TTSResult,
+)
 from vn_core.render.tts_input_composer import TTSInputComposer
 from vn_core.scanner import BookScanner
 from vn_core.segmenter import SEGMENTER_VERSION, ChineseSegmenter
@@ -48,6 +62,7 @@ from vn_core.xhtml import generate_cleaned_html, wrap_full_document
 
 __all__ = [
     "AdaptationResult", "TextAdapter", "basic_cleanup",
+    "AdaptationPolicy", "LLMTextAdapter",
     "BookModel",
     "CostEstimate", "CostPlanner",
     "AudioTake", "ContextCapsule", "ContextSpec",
@@ -62,10 +77,12 @@ __all__ = [
     "ImportedChapter", "SourceParagraph",
     "import_book", "import_epub", "import_txt",
     "LLMGateway", "LLMMessage", "LLMRequest",
+    "AnthropicLLMBackend", "DeepSeekLLMBackend", "MockLLMBackend", "OpenAILLMBackend",
     "ExecutionMode", "Orchestrator", "OrchestratorConfig",
     "PackagingService", "ReadingPlanner",
+    "PromptDefinition", "PromptRegistry",
     "PreflightCheck", "PreflightResult",
-    "EdgeTTSAdapter", "MockTTSAdapter", "SpeechGateway", "TTSResult",
+    "CosyVoiceAdapter", "EdgeTTSAdapter", "MockTTSAdapter", "SpeechGateway", "TTSResult",
     "TTSInputComposer",
     "BookScanner",
     "SEGMENTER_VERSION", "ChineseSegmenter",

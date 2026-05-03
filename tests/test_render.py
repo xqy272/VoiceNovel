@@ -5,7 +5,7 @@ import wave
 import pytest
 
 from vn_core.contracts.speech_request import BackendSpeechRequest, SpeechStyle
-from vn_core.render import MockTTSAdapter, SpeechGateway
+from vn_core.render import CosyVoiceAdapter, MockTTSAdapter, SpeechGateway
 
 
 @pytest.fixture
@@ -33,6 +33,62 @@ class TestMockTTSAdapter:
             assert wav.getnchannels() == 1
             assert wav.getframerate() > 0
             assert wav.getnframes() > 0
+
+
+class TestCosyVoiceAdapter:
+    def test_emotion_to_speed_mapping(self):
+        """Verify emotion-to-speed mapping for CosyVoice."""
+        adapter = CosyVoiceAdapter(output_dir="data/test_tts")
+
+        neutral = type("Style", (), {"emotion": "neutral", "intensity": 0.0})()
+        assert adapter._emotion_to_speed(neutral) == 1.0
+
+        excited = type("Style", (), {"emotion": "excited", "intensity": 0.8})()
+        assert adapter._emotion_to_speed(excited) == 1.25
+
+        sad = type("Style", (), {"emotion": "sad", "intensity": 0.0})()
+        assert adapter._emotion_to_speed(sad) == 0.85
+
+    def test_emotion_to_speed_unknown_defaults_to_neutral(self):
+        adapter = CosyVoiceAdapter(output_dir="data/test_tts")
+        unknown = type("Style", (), {"emotion": "unknown_emotion", "intensity": 0.0})()
+        assert adapter._emotion_to_speed(unknown) == 1.0
+
+    def test_construction_defaults(self):
+        adapter = CosyVoiceAdapter(output_dir="data/test_tts")
+        assert adapter.engine == "cosyvoice"
+        assert adapter.endpoint == "http://localhost:50000"
+        assert adapter.default_voice == "default"
+
+    @pytest.mark.asyncio
+    async def test_synthesize_no_backend_available(self):
+        """When CosyVoice isn't running, should return error (never raise)."""
+        adapter = CosyVoiceAdapter(output_dir="data/test_tts", endpoint="http://127.0.0.1:1")
+        request = BackendSpeechRequest(
+            request_id="ttsreq_cosy_test",
+            engine="cosyvoice",
+            segment_id="ch001_p001_s000",
+            voice_id="default",
+            text="测试文本",
+            style=SpeechStyle(),
+        )
+        result = await adapter.synthesize(request)
+        assert result.status == 'error'  # server not running, must not raise
+
+
+class TestCosyVoiceGatewayIntegration:
+    def test_cosyvoice_in_fallback_chain(self):
+        """Ensure cosyvoice is in SpeechGateway fallback order."""
+        gateway = SpeechGateway(output_dir="data/test_tts")
+        assert "cosyvoice" in gateway._fallback_order
+        assert gateway._fallback_order[0] == "cosyvoice"
+
+    def test_register_cosyvoice_adapter(self):
+        gateway = SpeechGateway(output_dir="data/test_tts")
+        adapter = CosyVoiceAdapter(output_dir="data/test_tts")
+        gateway.register_adapter("cosyvoice", adapter)
+        assert "cosyvoice" in gateway._adapters
+        assert gateway._adapters["cosyvoice"] is adapter
 
 
 class TestSpeechGateway:

@@ -323,3 +323,15 @@ def rollback_adaptation_ops(
                 text = text.replace(orig, norm, 1)
 
     return new_ops, text
+
+
+# ── LLM-driven adaptation (lazy import to avoid circular deps) ───────────
+
+from vn_core.adaptation.llm_adapter import AdaptationPolicy, LLMTextAdapter  # noqa: E402
+
+__all__ = [
+    "AdaptationResult", "TextAdapter", "basic_cleanup", "fix_punctuation",
+    "replay_adaptation_ops", "replay_display_text", "replay_tts_text",
+    "diff_text", "rollback_adaptation_ops",
+    "AdaptationPolicy", "LLMTextAdapter",
+]

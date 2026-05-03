@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -20,7 +21,6 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from vn_core.adaptation import TextAdapter
 from vn_core.book_model import BookModel
 from vn_core.contracts.generation_config import GenerationConfig
 from vn_core.contracts.job_state import JobStage, JobState, JobStatus
@@ -36,7 +36,8 @@ from vn_core.packaging import PackagingService
 from vn_core.pipeline.pipeline import Pipeline
 from vn_core.planner import ReadingPlanner
 from vn_core.preflight import PreflightCheck
-from vn_core.render import SpeechGateway
+from vn_core.prompts import PromptRegistry
+from vn_core.render import CosyVoiceAdapter, SpeechGateway
 from vn_core.render.tts_input_composer import TTSInputComposer
 from vn_core.segmenter import ChineseSegmenter
 from vn_core.store import ProjectStore
@@ -156,12 +157,20 @@ def create_app(data_dir: str = "data", store_path: str | None = None) -> FastAPI
     )
 
     segmenter = ChineseSegmenter()
-    TextAdapter()
     voice_registry = VoiceRegistry()
-    llm_gateway = LLMGateway()
-    ReadingPlanner(llm=llm_gateway)
+    prompt_registry = PromptRegistry()
+    prompt_registry.load_builtins()
+    llm_gateway = LLMGateway(prompt_registry=prompt_registry)
+    llm_gateway.configure_from_env()
     tts_composer = TTSInputComposer()
     tts_gateway = SpeechGateway(output_dir=str(data_path / "tts_output"))
+    tts_gateway.register_adapter(
+        "cosyvoice",
+        CosyVoiceAdapter(
+            output_dir=str(data_path / "tts_output"),
+            endpoint=os.environ.get("VN_COSYVOICE_ENDPOINT", "http://localhost:50000"),
+        ),
+    )
     pkg_service = PackagingService()
     cost_planner = CostPlanner()
     harness = HarnessGate()
@@ -290,9 +299,13 @@ def create_app(data_dir: str = "data", store_path: str | None = None) -> FastAPI
         return True, "ok"
 
     def _validate_path_component(value: str) -> str:
-        """Reject path traversal sequences in identifiers used as path components."""
-        if not value or ".." in value or "/" in value or "\\" in value:
-            raise HTTPException(status_code=400, detail=f"Invalid identifier: {value}")
+        """Reject path traversal, null bytes, and glob metacharacters in identifiers."""
+        if not value:
+            raise HTTPException(status_code=400, detail="Empty identifier")
+        forbidden = {"..", "/", "\\", "\x00", ":", "*", "?", "[", "]"}
+        has_forbidden = any(c in value for c in forbidden)
+        if has_forbidden or "%" in value:
+            raise HTTPException(status_code=400, detail=f"Invalid identifier: {value[:40]}")
         return value
 
     def _require_book(book_id: str):
@@ -376,16 +389,31 @@ def create_app(data_dir: str = "data", store_path: str | None = None) -> FastAPI
 
     @app.post("/api/projects")
     async def create_project(req: CreateProjectRequest):
-        source = Path(req.source_path)
+        source = Path(req.source_path).resolve()
+        # Restrict imports to known-safe directories
+        allowed_roots = [
+            data_path.resolve(),
+            Path.cwd().resolve(),
+        ]
+        if not any(
+            str(source).startswith(str(root))
+            for root in allowed_roots
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="Source file must be within the project data directory or current working directory",
+            )
         if not source.exists():
-            raise HTTPException(status_code=404, detail=f"Source file not found: {req.source_path}")
+            raise HTTPException(status_code=404, detail="Source file not found")
+        if not source.is_file():
+            raise HTTPException(status_code=400, detail="Source path must be a file")
 
         book_id = req.book_id or f"book_{source.stem}_{uuid.uuid4().hex[:8]}"
         try:
             chapters = import_book(str(source), book_id=book_id, store=store)
             store.upsert_generation_config(GenerationConfig(book_id=book_id))
         except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail="Failed to import book") from e
 
         title = req.title or (chapters[0].title if chapters else book_id)
 
