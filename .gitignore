@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+
+# Test / lint cache
+.pytest_cache/
+.pytest-tmp/
+.tmp_pytest/
+.tmp_pytest*/
+tmp-pytest/
+.ruff_cache/
+.mypy_cache/
+
+# Codex / agent scratch
+.codex_probe_*/
+
+# Runtime logs / scratch
+.run/
+artifact_data/
+
+# Node
+node_modules/
+web_reader/dist/
+
+# Runtime data (generated at runtime, not committed)
+data/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
